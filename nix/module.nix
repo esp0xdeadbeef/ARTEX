@@ -2,9 +2,8 @@
   config,
   lib,
   pkgs,
-  inputs,
   ...
-}:
+}@args:
 let
   cfg = config.services.artex;
 in
@@ -14,8 +13,8 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.artex;
-      defaultText = lib.literalExpression "inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.artex";
+      default = (args.inputs.self or args.self or (import ../flake.nix).self).packages.${pkgs.stdenv.hostPlatform.system}.artex;
+      defaultText = lib.literalExpression "self.packages.${pkgs.stdenv.hostPlatform.system}.artex";
       description = "The artex package to use.";
     };
 

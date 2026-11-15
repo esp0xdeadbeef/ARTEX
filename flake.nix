@@ -147,7 +147,7 @@
           dnsutils
           iputils
           netcat-openbsd
-          telnet
+          inetutils
           whois
           nmap
           sqlmap
