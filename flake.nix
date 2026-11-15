@@ -175,6 +175,90 @@
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
           PLAYWRIGHT_NODEJS_PATH = "${pkgs.nodejs}/bin/node";
         };
+        # `nix run .#container`: load the OCI image into Podman (or Docker, if Podman
+        # is missing) and run it as the calling user, publishing the UI and the
+        # recording proxy on loopback. Extra arguments are passed to the container.
+        #
+        #   ARTEX_PG_DSN / ARTEX_PG_DSN_FILE       database
+        #   OPENAI_API_KEY / _FILE                 LLM key (ANTHROPIC_API_KEY too)
+        #   ARTEX_LLM_PROVIDER / _MODEL / _BASE_URL  e.g. DeepSeek
+        #   ARTEX_DATA_DIR    host dir for /app/data (default ~/.local/share/artex/data)
+        #   ARTEX_KEY_DIR     host dir for /app/keys (default ~/.local/state/artex/keys)
+        #   ARTEX_CONTAINER_NAME, ARTEX_PODMAN     container name / engine override
+        runContainer = pkgs.writeShellApplication {
+          name = "artex-container";
+          runtimeInputs = with pkgs; [
+            coreutils
+            findutils
+          ];
+          text = ''
+            engine="''${ARTEX_PODMAN:-}"
+            if [ -z "$engine" ]; then
+              for candidate in podman docker; do
+                if command -v "$candidate" >/dev/null 2>&1; then engine="$candidate"; break; fi
+              done
+            fi
+            if [ -z "$engine" ]; then
+              echo "artex: neither podman nor docker found — set ARTEX_PODMAN" >&2
+              exit 1
+            fi
+
+            name="''${ARTEX_CONTAINER_NAME:-artex}"
+            data="''${ARTEX_DATA_DIR:-''${XDG_DATA_HOME:-$HOME/.local/share}/artex/data}"
+            keys="''${ARTEX_KEY_DIR:-''${XDG_STATE_HOME:-$HOME/.local/state}/artex/keys}"
+            mkdir -p "$data" "$keys"
+
+            echo "artex: loading image into $engine" >&2
+            "$engine" load -i ${self.packages.${system}.container} >/dev/null
+            "$engine" rm -f "$name" >/dev/null 2>&1 || true
+
+            # Forward only variables that are set: an empty OPENAI_API_KEY would
+            # otherwise be sent along and change provider inference.
+            env_args=()
+            for var in ARTEX_PG_DSN ARTEX_PG_DSN_FILE ARTEX_SECRET_KEY ARTEX_SECRET_KEY_FILE \
+                       ANTHROPIC_API_KEY ANTHROPIC_API_KEY_FILE \
+                       OPENAI_API_KEY OPENAI_API_KEY_FILE \
+                       ARTEX_LLM_PROVIDER ARTEX_LLM_MODEL ARTEX_LLM_BASE_URL ARTEX_LLM_PROXY \
+                       ARTEX_NOISE_PROFILE ARTEX_TARGET_USER_AGENT ARTEX_UNTRUSTED_BOUNDARY \
+                       ARTEX_TASK_BUDGET_TOKENS ARTEX_TASK_BUDGET_TURNS \
+                       ARTEX_INTENT_BUDGET_TOKENS ARTEX_INTENT_BUDGET_TURNS \
+                       ARTEX_TRUSTED_PROXIES; do
+              if [ -n "''${!var:-}" ]; then env_args+=(-e "$var=''${!var}"); fi
+            done
+
+            # ARTEX_NETWORK=host lets the container reach services bound to the host's
+            # loopback (e.g. a local PostgreSQL), which is the common single-host setup.
+            net_args=()
+            if [ "''${ARTEX_NETWORK:-}" = "host" ]; then
+              net_args=(--network=host)
+            else
+              net_args=(-p 127.0.0.1:8787:8787 -p 127.0.0.1:8788:8788)
+            fi
+
+            # A *_FILE path given on the host must be visible under the same path in
+            # the container, so those files are mounted read-only.
+            mount_args=()
+            for var in ARTEX_PG_DSN_FILE ARTEX_SECRET_KEY_FILE ANTHROPIC_API_KEY_FILE OPENAI_API_KEY_FILE; do
+              path="''${!var:-}"
+              if [ -n "$path" ]; then
+                if [ ! -r "$path" ]; then echo "artex: $var=$path is not readable" >&2; exit 1; fi
+                mount_args+=(-v "$(realpath "$path"):$(realpath "$path"):ro")
+              fi
+            done
+
+            if [ -z "''${ARTEX_PG_DSN:-}" ] && [ -z "''${ARTEX_PG_DSN_FILE:-}" ]; then
+              echo "artex: no database configured — set ARTEX_PG_DSN or ARTEX_PG_DSN_FILE" >&2
+            fi
+
+            echo "artex: UI http://127.0.0.1:8787  ·  proxy 127.0.0.1:8788  ·  Ctrl-C to stop" >&2
+            exec "$engine" run --rm --name "$name" --userns=keep-id \
+              "''${net_args[@]}" \
+              -v "$data:/app/data:Z" -v "$keys:/app/keys:Z" \
+              "''${mount_args[@]}" "''${env_args[@]}" \
+              localhost/artex:latest -addr :8787 -proxy :8788 -data /app/data "$@"
+          '';
+        };
+
       in
       {
         packages = {
@@ -187,18 +271,8 @@
           postgres = pkgs.postgresql;
         };
 
-        apps = {
-          default = {
-            type = "app";
-            program = "${artexWrapped}/bin/artex";
-          };
-          artex = {
-            type = "app";
-            program = "${artex}/bin/artex";
-          };
-        };
-
-        # `nix run .#container` or: nix build .#container && docker load < result
+        # OCI image tarball: `nix build .#container` then `podman load -i result`.
+        # A tarball is not executable, so `nix run` goes through apps.container below.
         packages.container = pkgs.dockerTools.buildLayeredImage {
           name = "artex";
           tag = "latest";
@@ -236,6 +310,23 @@
               "/app/data" = { };
               "/app/keys" = { };
             };
+          };
+        };
+
+        apps = {
+          default = {
+            type = "app";
+            program = "${artexWrapped}/bin/artex";
+          };
+          artex = {
+            type = "app";
+            program = "${artex}/bin/artex";
+          };
+          # `nix run .#container` — runs the OCI image, not the package tarball.
+          container = {
+            type = "app";
+            program = "${runContainer}/bin/artex-container";
+            meta.description = "Run the ARTEX OCI image with Podman or Docker";
           };
         };
 
