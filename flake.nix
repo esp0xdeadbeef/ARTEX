@@ -205,7 +205,15 @@
           contents = [ artex ] ++ runtimeInputs ++ [ pkgs.bashInteractive ];
           config = {
             Env = [
-              "PATH=${lib.makeBinPath ([ artex pkgs.bash ] ++ runtimeInputs)}"
+              "PATH=${
+                lib.makeBinPath (
+                  [
+                    artex
+                    pkgs.bash
+                  ]
+                  ++ runtimeInputs
+                )
+              }"
               "ARTEX_SKILL_DIR=/share/artex/skills"
               "ARTEX_JWT_KEY_DIR=/app/keys"
               "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
@@ -231,7 +239,7 @@
           };
         };
 
-        formatter = pkgs.nixfmt-rfc-style;
+        formatter = pkgs.nixfmt;
         inherit devShells;
       }
     )

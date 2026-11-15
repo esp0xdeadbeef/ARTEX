@@ -13,7 +13,9 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = (args.inputs.self or args.self or (import ../flake.nix).self).packages.${pkgs.stdenv.hostPlatform.system}.artex;
+      default =
+        (args.inputs.self or args.self or (import ../flake.nix).self)
+        .packages.${pkgs.stdenv.hostPlatform.system}.artex;
       defaultText = lib.literalExpression "self.packages.${pkgs.stdenv.hostPlatform.system}.artex";
       description = "The artex package to use.";
     };
@@ -151,15 +153,14 @@ in
       wants = [ "network-online.target" ];
       requires = lib.optional cfg.postgres.enable "postgresql.service";
 
-      environment =
-        {
-          ARTEX_SKILL_DIR = cfg.skillDir;
-          ARTEX_JWT_KEY_DIR = cfg.keyDir;
-        }
-        // lib.optionalAttrs (cfg.settings != null) {
-          ARTEX_CONFIG = "/run/artex/config.json";
-        }
-        // lib.mapAttrs (_: toString) cfg.environment;
+      environment = {
+        ARTEX_SKILL_DIR = cfg.skillDir;
+        ARTEX_JWT_KEY_DIR = cfg.keyDir;
+      }
+      // lib.optionalAttrs (cfg.settings != null) {
+        ARTEX_CONFIG = "/run/artex/config.json";
+      }
+      // lib.mapAttrs (_: toString) cfg.environment;
 
       preStart = lib.mkMerge [
         ''mkdir -p "${cfg.dataDir}" "${cfg.keyDir}"''
