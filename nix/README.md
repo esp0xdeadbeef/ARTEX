@@ -111,3 +111,40 @@ loopback (`127.0.0.1:8788` by default).
   `server/webui/dist` is git-ignored and therefore not part of the flake source.
 - Tests are not run in the sandbox (`doCheck = false`): most of them need a live
   PostgreSQL instance.
+
+## Secrets as files (Docker/Podman, systemd)
+
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `ARTEX_PG_DSN` and `ARTEX_SECRET_KEY` each also
+accept a `*_FILE` variant pointing at a file that holds the value:
+
+```sh
+ARTEX_PG_DSN_FILE=/run/secrets/pg-dsn
+OPENAI_API_KEY_FILE=/run/secrets/deepseek-api
+ARTEX_SECRET_KEY_FILE=/run/secrets/artex-secret-key
+```
+
+The `_FILE` variable wins over the plain one; one trailing newline is stripped
+(`printf`, `openssl rand -hex`, editors); an unreadable or empty file aborts startup
+rather than silently falling back. All of these variables (paths included) are scrubbed
+from the environment before the first worker shell is spawned, so agents cannot read the
+credential off the process environment.
+
+### Podman (rootless) + DeepSeek
+
+`nix/podman-compose.yml` wires the image to a PostgreSQL container and DeepSeek's
+OpenAI-compatible endpoint, both credentials mounted as files:
+
+```sh
+nix build .#container -o ~/.cache/artex-oci && podman load -i ~/.cache/artex-oci
+
+umask 077; mkdir -p .secrets
+openssl rand -hex 24 > .secrets/pg-password
+printf 'postgres://artex:%s@postgres:5432/artex?sslmode=disable\n' "$(cat .secrets/pg-password)" > .secrets/pg-dsn
+cp ~/.config/sops-nix/secrets/deepseek-api .secrets/deepseek-api
+
+podman-compose -f nix/podman-compose.yml up -d
+podman logs artex 2>&1 | grep "Setup token"
+```
+
+UI: <http://127.0.0.1:8787>. State: volumes `artex-data` (traffic/task data) and
+`artex-keys` (JWT + at-rest encryption keys). `.secrets/` is git-ignored.

@@ -1,0 +1,78 @@
+# ARTEX on Podman (rootless), every credential mounted as a secret file.
+#
+# One-time setup (the password never appears on a command line or in an env var):
+#
+#   nix build .#container -o ~/.cache/artex-oci
+#   podman load -i ~/.cache/artex-oci
+#
+#   umask 077; mkdir -p .secrets
+#   openssl rand -hex 24 > .secrets/pg-password
+#   printf 'postgres://artex:%s@postgres:5432/artex?sslmode=disable\n' \
+#     "$(cat .secrets/pg-password)" > .secrets/pg-dsn
+#   cp ~/.config/sops-nix/secrets/deepseek-api .secrets/deepseek-api
+#
+#   podman-compose -f nix/podman-compose.yml up -d
+#   podman logs artex 2>&1 | grep "Setup token"     # then open http://127.0.0.1:8787
+#
+# .secrets/ is ignored by git. Point the *_FILE variables at other paths to
+# reuse an existing sops-nix / systemd credential layout.
+services:
+  postgres:
+    image: docker.io/library/postgres:16-alpine
+    pull_policy: newer
+    environment:
+      POSTGRES_USER: artex
+      POSTGRES_DB: artex
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg-password
+    secrets:
+      - pg-password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U artex -d artex"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  artex:
+    image: localhost/artex:latest
+    pull_policy: never
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # ARTEX reads these *_FILE variables; the key itself never enters the env.
+      # Optional: at-rest encryption key for stored secrets (ARTEX_SECRET_KEY_FILE).
+      ARTEX_PG_DSN_FILE: /run/secrets/pg-dsn
+      OPENAI_API_KEY_FILE: /run/secrets/deepseek-api
+      ARTEX_LLM_PROVIDER: openai
+      ARTEX_LLM_MODEL: deepseek-chat
+      ARTEX_LLM_BASE_URL: https://api.deepseek.com/v1
+      ARTEX_JWT_KEY_DIR: /app/keys
+      ARTEX_SKILL_DIR: /share/artex/skills
+      # Optional: pace requests to the target (off if unset).
+      ARTEX_NOISE_PROFILE: balanced
+    secrets:
+      - pg-dsn
+      - deepseek-api
+    ports:
+      - "127.0.0.1:8787:8787"
+      - "127.0.0.1:8798:8788"
+    volumes:
+      - artex-data:/app/data
+      - artex-keys:/app/keys
+    restart: unless-stopped
+
+secrets:
+  pg-dsn:
+    file: ${PG_DSN_FILE:-./.secrets/pg-dsn}
+  deepseek-api:
+    file: ${DEEPSEEK_KEY_FILE:-./.secrets/deepseek-api}
+  pg-password:
+    file: ${PG_PASSWORD_FILE:-./.secrets/pg-password}
+
+volumes:
+  pgdata:
+  artex-data:
+  artex-keys:

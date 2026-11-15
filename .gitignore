@@ -73,3 +73,6 @@ benchmark-results/
 # nix build artifacts
 /result
 /result-*
+
+# podman-compose secrets
+/.secrets/

@@ -4,7 +4,14 @@ import "os"
 
 // secretEnv lists the credentials read from the environment only at startup:
 // ARTEX_PG_DSN and ARTEX_SECRET_KEY by NewManager, the API keys by agent.FromEnv inside New.
-var secretEnv = []string{"ARTEX_PG_DSN", "ARTEX_SECRET_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"}
+// The _FILE variants carry the path of a mounted key file instead of the key itself;
+// dropping them too keeps worker shells from reading the credential off disk.
+var secretEnv = []string{
+	"ARTEX_PG_DSN", "ARTEX_PG_DSN_FILE",
+	"ARTEX_SECRET_KEY", "ARTEX_SECRET_KEY_FILE",
+	"ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_FILE",
+	"OPENAI_API_KEY", "OPENAI_API_KEY_FILE",
+}
 
 // ScrubSecretEnv removes secretEnv from the process environment once startup has
 // read it. Child processes (agent shells, custom tools, MCP stdio servers) copy

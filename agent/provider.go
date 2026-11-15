@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Autumn-27/artex/config"
 	"github.com/Autumn-27/artex/llmrec"
 	"github.com/Autumn-27/norma/agentcore"
 	"github.com/Autumn-27/norma/compaction"
@@ -206,12 +207,25 @@ func compactionConfig(windowTokens int) *compaction.Config {
 //	ARTEX_LLM_BASE_URL = endpoint        (optional; ollama defaults to localhost:11434/v1)
 //	ARTEX_LLM_PROXY    = proxy URL        (optional; http/https/socks5)
 //	ANTHROPIC_API_KEY / OPENAI_API_KEY         = credentials (unused for ollama)
+//	ANTHROPIC_API_KEY_FILE / OPENAI_API_KEY_FILE = read the same key from a file
+//	                                             (takes precedence; Docker/Podman
+//	                                             secrets, systemd LoadCredential)
 func FromEnv() (Config, bool) {
 	// Case- and space-insensitive: "Ollama" used to miss every case below and
 	// fall through to anthropic, sending ANTHROPIC_API_KEY to the Ollama base URL.
 	prov := strings.ToLower(strings.TrimSpace(os.Getenv("ARTEX_LLM_PROVIDER")))
-	anthKey := os.Getenv("ANTHROPIC_API_KEY")
-	oaiKey := os.Getenv("OPENAI_API_KEY")
+	// Keys may come from a file (Docker/Podman secret, systemd LoadCredential):
+	// ANTHROPIC_API_KEY_FILE / OPENAI_API_KEY_FILE win over the plain variable.
+	anthKey, anthSource, anthErr := config.SecretFromEnv("ANTHROPIC_API_KEY")
+	oaiKey, oaiSource, oaiErr := config.SecretFromEnv("OPENAI_API_KEY")
+	if anthErr != nil {
+		log.Printf("[engine] %v", anthErr)
+		anthKey = ""
+	}
+	if oaiErr != nil {
+		log.Printf("[engine] %v", oaiErr)
+		oaiKey = ""
+	}
 
 	if prov == "" {
 		switch {
@@ -265,6 +279,15 @@ func FromEnv() (Config, bool) {
 	// Ollama runs without a key: only the cloud formats gate on one.
 	if c.APIKey == "" && c.NeedsAPIKey() {
 		return Config{}, false
+	}
+	// Never log the key: only where it came from.
+	switch c.Format {
+	case llm.FormatOpenAI, llm.FormatOpenAIResponses:
+		log.Printf("[engine] %s key loaded from %s", c.Provider(), oaiSource)
+	default:
+		if c.NeedsAPIKey() {
+			log.Printf("[engine] %s key loaded from %s", c.Provider(), anthSource)
+		}
 	}
 	return c, true
 }

@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+
+	"github.com/Autumn-27/artex/config"
 )
 
 // Secrets at rest: AES-256-GCM, a random nonce per value, AAD "<table>.<column>"
@@ -278,10 +280,13 @@ func (d *DB) InitSecrets(keyDir string) error {
 }
 
 func loadSecretKey(ctx context.Context, conn *sql.Conn, keyDir string) ([]byte, error) {
-	if v := strings.TrimSpace(os.Getenv(secretKeyEnv)); v != "" {
+	// ARTEX_SECRET_KEY, or the same value read from ARTEX_SECRET_KEY_FILE.
+	if v, source, err := config.SecretFromEnv(secretKeyEnv); err != nil {
+		return nil, err
+	} else if v != "" {
 		k, err := parseSecretKey(v)
 		if err != nil {
-			return nil, fmt.Errorf("%s %w", secretKeyEnv, err)
+			return nil, fmt.Errorf("%s (%s) %w", secretKeyEnv, source, err)
 		}
 		return k, nil
 	}

@@ -382,6 +382,17 @@ runtime supports it.
 }
 ```
 
+**DeepSeek / any OpenAI-compatible endpoint**: `ARTEX_LLM_PROVIDER=openai`,
+`ARTEX_LLM_BASE_URL=https://api.deepseek.com/v1`, `ARTEX_LLM_MODEL=deepseek-chat`, and the key
+in `OPENAI_API_KEY` (or `OPENAI_API_KEY_FILE=/run/secrets/deepseek-api`).
+
+**Secrets from files**: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `ARTEX_PG_DSN` and
+`ARTEX_SECRET_KEY` each also accept a `*_FILE` variant naming a file to read the value from
+(Podman/Docker secrets, Kubernetes mounts, systemd `LoadCredential=`). The `_FILE` variable
+wins over the plain one; one trailing newline is stripped; an unreadable or empty file is a
+startup error rather than a silent fallback. The NixOS module and the flake's container
+examples use this form.
+
 **LLM**: `export ANTHROPIC_API_KEY=sk-...` (or `OPENAI_API_KEY`), or configure it in the UI's
 "LLM Configuration" page, which can also add a local Ollama server as a keyless provider (format
 "Ollama", default base URL `http://127.0.0.1:11434/v1`). Optional:

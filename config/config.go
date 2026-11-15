@@ -163,8 +163,12 @@ func SkillDir() (string, error) {
 // instead of silently connecting to a wrong default. source describes where the
 // DSN came from (for startup logging).
 func PostgresDSN() (dsn, source string, err error) {
-	if v := strings.TrimSpace(os.Getenv("ARTEX_PG_DSN")); v != "" {
-		return v, "environment variable ARTEX_PG_DSN", nil
+	// ARTEX_PG_DSN_FILE lets container deployments mount the DSN (password and
+	// all) as a secret file instead of an environment variable.
+	if v, source, err := SecretFromEnv("ARTEX_PG_DSN"); err != nil {
+		return "", "", err
+	} else if v != "" {
+		return v, source, nil
 	}
 	c, err := Load()
 	if err != nil {
