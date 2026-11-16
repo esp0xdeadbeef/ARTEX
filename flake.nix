@@ -254,12 +254,30 @@
               listen_args=(-addr :8787 -proxy :8788)
             fi
 
+            mount_args=()
+
+            # ARTEX_HOST_NIX=1 exposes the host's NixOS toolchain inside the
+            # container: /nix/store holds every binary with absolute RUNPATHs, so
+            # mounting /nix (read-only) plus /run/current-system makes host tools
+            # like nmap, nuclei or your own scripts run unchanged — no extra
+            # image, no alpine, nothing installed.
+            if [ "''${ARTEX_HOST_NIX:-0}" = "1" ]; then
+              for d in /nix /run/current-system; do
+                if [ ! -d "$d" ]; then
+                  echo "artex: ARTEX_HOST_NIX=1 but $d does not exist on this host" >&2
+                  exit 1
+                fi
+              done
+              mount_args+=(-v /nix:/nix:ro -v /run/current-system:/run/current-system:ro)
+              env_args+=(-e "PATH=/run/current-system/sw/bin:/app/bin:/usr/local/bin:/usr/bin:/bin")
+              echo "artex: host NixOS toolchain mounted (this host's /run/current-system/sw/bin)" >&2
+            fi
+
             # A *_FILE path from the host must be readable inside the container.
             # It is mounted at a fixed location under /run/artex-secrets and the
             # variable is repointed there: mapping $HOME paths through to the
             # same path breaks under rootless podman, whose daemon serves files
             # from /run/user/<uid>/secrets.d and cannot see the original location.
-            mount_args=()
             i=0
             for var in ARTEX_PG_DSN_FILE ARTEX_SECRET_KEY_FILE ANTHROPIC_API_KEY_FILE OPENAI_API_KEY_FILE; do
               path="''${!var:-}"

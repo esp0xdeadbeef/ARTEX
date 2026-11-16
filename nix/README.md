@@ -3,25 +3,137 @@
 Everything ARTEX needs (frontend → embedded Go binary → PostgreSQL) is packaged in
 [`flake.nix`](../flake.nix). No Docker, no manual `npm ci`/`go build`.
 
-## Try it
+## Quick start: container (recommended)
+
+One command; no local PostgreSQL, no manual build:
 
 ```sh
-# 1. shell with artex + the recon toolchain (nmap, nuclei, httpx, subfinder,
-#    katana, ffuf, dalfox, sqlmap, bbot, node, python) and PostgreSQL
+ARTEX_AUTO_DB=1 \
+nix run --refresh github:esp0xdeadbeef/ARTEX#container -- -u ARTEX -p 'YourPassword123'
+```
+
+That starts ARTEX plus a **throwaway PostgreSQL** and drops you at
+<http://localhost:8787/> already logged in (the password is seeded, so
+`/setup` is skipped). Add your LLM key and model in the same command:
+
+```sh
+ARTEX_AUTO_DB=1 ARTEX_PORT=8787 \
+OPENAI_API_KEY_FILE=$HOME/.config/sops-nix/secrets/deepseek-api \
+ARTEX_LLM_PROVIDER=openai ARTEX_LLM_MODEL=deepseek-chat \
+ARTEX_LLM_BASE_URL=https://api.deepseek.com/v1 \
+nix run --refresh github:esp0xdeadbeef/ARTEX#container -- -u ARTEX -p 'YourPassword123'
+```
+
+A database is mandatory: either `ARTEX_AUTO_DB=1` (throwaway PostgreSQL in a
+container) or `ARTEX_PG_DSN`/`ARTEX_PG_DSN_FILE` (existing one). With neither the
+launcher **refuses to start** and prints the options — `ARTEX_AUTO_DB` is *not*
+implied, because silently creating a database on every run hides that your data
+is temporary.
+
+### Launcher environment variables
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ARTEX_PORT` | `8787` | Host port for the UI/API. The container itself always listens on 8787. |
+| `ARTEX_PROXY_PORT` | `8788` | Host port for the traffic-recording proxy. |
+| `ARTEX_AUTO_DB` | off | Start a throwaway PostgreSQL container and wire the DSN to it. |
+| `ARTEX_DATA_DIR` | `~/.local/share/artex/data` | Host dir mounted at `/app/data` (traffic, transcripts, task files). |
+| `ARTEX_KEY_DIR` | `~/.local/state/artex/keys` | Host dir mounted at `/app/keys` (JWT key, at-rest encryption key). |
+| `ARTEX_CONTAINER_NAME` | `artex` | Container name; also names the DB container and network. |
+| `ARTEX_PODMAN` | auto | Engine to use (`podman`, `docker`, or a path). |
+| `ARTEX_NETWORK` | bridge | `host` → share the host network (see below). |
+| `ARTEX_HOST_NIX` | off | `1` → mount the host's `/nix` + `/run/current-system`, so the agent runs the **host's** NixOS toolchain. |
+| `ARTEX_PG_DSN` / `_FILE` | — | Point at an existing PostgreSQL instead of a throwaway one. |
+| `ARTEX_SECRET_KEY` / `_FILE` | generated | Key encrypting secrets at rest. |
+
+Extra arguments after `--` go to the `artex` binary, e.g. `-- -p '...'`,
+`-- -addr :9000`, `-h` for help.
+
+### Notes and gotchas
+
+- **Always pass `--refresh`** with `nix run github:...`. Nix caches the flake
+  revision, so without it you silently run an older commit (check the
+  `version <rev>` line in the banner). To be explicit, pin a revision:
+  `github:esp0xdeadbeef/ARTEX/<rev>#container`.
+- **The first run loads a ~2 GB image.** Later runs skip the load when the
+  build is unchanged (the image carries an `artex.nix.build` label), so
+  starts take seconds after the first.
+- **`ARTEX_AUTO_DB=1` is ephemeral.** Every start creates a fresh database:
+  your password resets and tasks/findings are lost. Use `ARTEX_PG_DSN` (or
+  `nix/podman-compose.yml`, which has a named `pgdata` volume) for anything
+  you want to keep. `ARTEX_DATA_DIR` alone does **not** preserve findings —
+  they live in PostgreSQL.
+- **Reaching host services from the agent's shell** needs `ARTEX_NETWORK=host`.
+  Without it the agent's `127.0.0.1` is the container. With it, `ARTEX_PORT`
+  applies directly (the app binds `:PORT` on the host) and a throwaway
+  database is started on the host network too.
+- **Your `$HOME` is not mounted.** Inside the container `$HOME` is `/app`; the
+  agent only sees `/app/data`, `/app/keys` and `/run/artex-secrets/*`. Point
+  `ARTEX_DATA_DIR` at the directory you want the agent to work in.
+- **A suspended/zombie `podman` holds the store lock** and makes every podman
+  command (even `podman ps`) hang. The launcher probes the engine and tells
+  you how to recover; find the culprit with
+  `ps -eo pid,stat,cmd | grep -E "[TZ].*podman"` and `kill -CONT <pid>`.
+
+### Using the host's NixOS toolchain inside the container
+
+The container ships its own toolchain, but on NixOS the host's binaries are
+already self-contained: everything lives in `/nix/store` with absolute
+`RUNPATH`s. Mounting `/nix` (read-only) plus `/run/current-system` makes the
+**host's** tools run inside ARTEX unchanged — no extra image, no alpine, no
+install step:
+
+```sh
+ARTEX_HOST_NIX=1 ARTEX_AUTO_DB=1 \
+nix run --refresh github:esp0xdeadbeef/ARTEX#container -- -u ARTEX -p 'YourPassword123'
+```
+
+The agent's Bash tool then resolves `nmap`, `nuclei`, `httpx`, `ffuf`,
+`sqlmap`, `python3` and **your own scripts** to `/run/current-system/sw/bin/…`
+— i.e. the exact binaries you have on the host, including anything you installed
+into your profile:
+
+```sh
+# from the agent shell / chat:
+nmap --version          # → your host's nmap
+python3 my-script.py    # → host python + host site-packages
+```
+
+Notes:
+
+- `/nix` is mounted **read-only**; the container cannot modify your store.
+- This shares binaries, not the host filesystem: `/home/deadbeef` is still not
+  visible. Mount the directory you want via `ARTEX_DATA_DIR` (→ `/app/data`).
+- `ARTEX_HOST_NIX=1` aborts with a clear error if `/nix` or
+  `/run/current-system` is missing (i.e. not a NixOS/Nix host).
+- Combined with `ARTEX_NETWORK=host` the agent gets host tools **and** host
+  network services; host tools are filesystem-only otherwise.
+
+### MCP servers in this container
+
+MCP servers are spawned **inside** the container, so a stdio MCP server can
+only use the image's toolchain (curl, nmap, nuclei, httpx, subfinder, katana,
+ffuf, dalfox, sqlmap, bbot, python3, node, git, jq, …) and cannot see host
+binaries or `$HOME`. To use host tooling, run the MCP server on the host and
+add it in *System Settings → MCP* as an `http` (Streamable HTTP) or `sse`
+transport, with `ARTEX_NETWORK=host` so the container can reach
+`http://127.0.0.1:<port>/…`.
+
+## Quick start: local (no container)
+
+```sh
+# 1. shell with artex + the recon toolchain and PostgreSQL
 nix develop
 
-# 2. start a throwaway PostgreSQL (in the shell)
+# 2. throwaway PostgreSQL
 initdb -D .pg -U artex --auth=trust
 pg_ctl -D .pg -o "-p 5499 -k /tmp -c listen_addresses=127.0.0.1" -l .pg.log start
 createdb -h 127.0.0.1 -p 5499 -U artex artex
 
-# 3. run ARTEX
+# 3. run ARTEX (seeds the password too)
 export ARTEX_PG_DSN="postgres://artex@127.0.0.1:5499/artex?sslmode=disable"
-nix run . -- -addr 127.0.0.1:8787 -proxy 127.0.0.1:8788
+nix run . -- -addr 127.0.0.1:8787 -proxy 127.0.0.1:8788 -u ARTEX -p 'YourPassword123'
 ```
-
-Open <http://127.0.0.1:8787>, enter the setup token printed at startup, set a password.
-Then configure an LLM in *System Settings → LLM* (or export `ANTHROPIC_API_KEY`).
 
 ## Packages
 
