@@ -235,24 +235,40 @@
               if [ -n "''${!var:-}" ]; then env_args+=(-e "$var=''${!var}"); fi
             done
 
+            # Published host ports, overridable so two instances can coexist:
+            #   ARTEX_PORT=8792 -> UI on 127.0.0.1:8792 (container still listens on 8787)
+            # The container always listens on 8787/8788 (the image's EXPOSE);
+            # these choose which host ports map to them.
+            port="''${ARTEX_PORT:-8787}"
+            proxy_port="''${ARTEX_PROXY_PORT:-8788}"
+
             # ARTEX_NETWORK=host lets the container reach services bound to the host's
             # loopback (e.g. a local PostgreSQL), which is the common single-host setup.
             net_args=()
             if [ "''${ARTEX_NETWORK:-}" = "host" ]; then
               net_args=(--network=host)
             else
-              net_args=(-p 127.0.0.1:8787:8787 -p 127.0.0.1:8788:8788)
+              net_args=(-p "127.0.0.1:$port:8787" -p "127.0.0.1:$proxy_port:8788")
             fi
 
-            # A *_FILE path given on the host must be visible under the same path in
-            # the container, so those files are mounted read-only.
+            # A *_FILE path from the host must be readable inside the container.
+            # It is mounted at a fixed location under /run/artex-secrets and the
+            # variable is repointed there: mapping $HOME paths through to the
+            # same path breaks under rootless podman, whose daemon serves files
+            # from /run/user/<uid>/secrets.d and cannot see the original location.
             mount_args=()
+            i=0
             for var in ARTEX_PG_DSN_FILE ARTEX_SECRET_KEY_FILE ANTHROPIC_API_KEY_FILE OPENAI_API_KEY_FILE; do
               path="''${!var:-}"
-              if [ -n "$path" ]; then
-                if [ ! -r "$path" ]; then echo "artex: $var=$path is not readable" >&2; exit 1; fi
-                mount_args+=(-v "$(realpath "$path"):$(realpath "$path"):ro")
+              [ -n "$path" ] || continue
+              if [ ! -r "$path" ]; then
+                echo "artex: $var=$path is not readable by this user" >&2
+                exit 1
               fi
+              i=$((i + 1))
+              target="/run/artex-secrets/$i-$(basename "$path")"
+              mount_args+=(-v "$(realpath "$path"):$target:ro")
+              env_args+=(-e "$var=$target")
             done
 
             # Fail here, not 30 s later inside the container: without a database
@@ -302,7 +318,7 @@
               exit 1
             fi
 
-            echo "artex: UI http://127.0.0.1:8787  ·  proxy 127.0.0.1:8788  ·  Ctrl-C to stop" >&2
+            echo "artex: UI http://127.0.0.1:$port  ·  proxy 127.0.0.1:$proxy_port  ·  Ctrl-C to stop" >&2
             exec "$engine" run --rm --name "$name" --userns=keep-id \
               "''${net_args[@]}" \
               -v "$data:/app/data:Z" -v "$keys:/app/keys:Z" \
