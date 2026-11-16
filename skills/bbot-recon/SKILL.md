@@ -6,8 +6,7 @@ description: "Invoke this skill when a hunt task needs breadth-first recon on an
 # bbot-recon: recursive recon under program-policy gates
 
 bbot (blacklanternsecurity/bbot, AGPL-3.0 like ARTEX, pinned v3.0.2 at
-`/usr/local/bin/bbot`, venv `/opt/bbot`, module dependencies preinstalled in
-the image) chains every discovery into an event graph and emits structured
+`bbot` on `PATH`, module dependencies preinstalled in the deployment) chains every discovery into an event graph and emits structured
 JSON. Use it for breadth. Keep the single-purpose tools (subfinder, httpx,
 katana, ffuf, nuclei) when you need exact control over individual requests or
 a single host.
@@ -61,10 +60,12 @@ rate control).
 
 ## Recipes
 
-Common tail for every run: `-om json,txt -o /app/data/tasks/<task_id>/bbot -n <intent-name> -y --no-deps`.
-`--no-deps` is mandatory: module dependencies are baked into the image, and a
-scan-time dependency check would run pip, which fails (or hangs) under a
-program's egress allowlist. One scan per intent, named after it
+Common tail for every run: `-om json,txt -o <task_dir>/bbot -n <intent-name> -y --no-deps`.
+`<task_dir>` is this task's directory under the server data root (the
+`DataDir` prompt variable; e.g. `<DataDir>/tasks/<task_id>`).
+`--no-deps` is mandatory: module dependencies are preinstalled in the
+deployment, and a scan-time dependency check would run pip, which fails (or
+hangs) under a program's egress allowlist. One scan per intent, named after it
 (`passive-subdoms`, `takeover`, `params`).
 
 0. Sanity first: `bbot --version && bbot -l | head -40` (the table lists each

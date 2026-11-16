@@ -1,21 +1,30 @@
 ---
 name: rea
-description: "Reverse-engineer binaries and application packages (ELF, PE, Mach-O, APK, IPA, HAP, WASM, ZIP/JAR containers, JavaScript bundles) through the rea MCP server running on the host. Invoke when a task needs static analysis of a compiled or packaged target: embedded secrets, hardcoded endpoints, native library review, string and constant extraction, managed code structure, or deobfuscation."
+description: "Reverse-engineer binaries and application packages (ELF, PE, Mach-O, APK, IPA, HAP, WASM, ZIP/JAR containers, JavaScript bundles) through the rea MCP server running as a separate process on the host. Invoke when a task needs static analysis of a compiled or packaged target: embedded secrets, hardcoded endpoints, native library review, string and constant extraction, managed code structure, or deobfuscation."
 mcps: rea
 ---
 
 # rea: binary and application reverse engineering
 
-The rea MCP server runs on the host machine, not inside this container. Its tools are named `mcp__rea__<tool>`. After this skill loads, their names appear as deferred tools: fetch each tool's schema with SearchExtraTools (for example `select:mcp__rea__open_binary`, or keywords like `rea strings`), then invoke it with ExecuteExtraTool. Use the tool that directly answers the question; do not enumerate the whole catalog.
+The rea MCP server runs on the host machine. Its tools are named `mcp__rea__<tool>`. After this skill loads, their names appear as deferred tools: fetch each tool's schema with SearchExtraTools (for example `select:mcp__rea__open_binary`, or keywords like `rea strings`), then invoke it with ExecuteExtraTool. Use the tool that directly answers the question; do not enumerate the whole catalog.
 
-## 1. File paths: container view vs host view
+## 1. File paths: what rea can see
 
-rea opens files on the HOST filesystem, not inside the container. Only files under the bind-mounted data directory are visible to both sides; the exact host prefix is deployment-specific (check the compose file, or ask the operator via task chat when unknown).
+rea reads files from the filesystem of the machine it runs on (the host).
+
+- **Host-native deployment** (ARTEX running as a host service): the paths are
+  the same paths you see, so anything under the data root is immediately
+  usable.
+- **Containerised deployment**: only the bind-mounted data directory is shared
+  with the host, and the host prefix differs from the in-container path. Save
+  target files under the data root (e.g. `<DataDir>/tasks/<task_id>/rea/`) and
+  pass the host-side equivalent in rea parameters. If `open_binary` reports a
+  missing path, you passed the in-container path.
 
 Rules:
-- Save or download every target file under the container data directory (for example `/app/data/tasks/<task_id>/rea/`) so both sides can see it. Files elsewhere in the container are invisible to rea.
-- Always pass the host-side path in rea tool parameters. If open_binary reports the path as missing, you passed a container path: retry with the host-side equivalent of the same mount.
-- Verify the file exists on your side (ls) before opening it with rea.
+- Save or download every target file under the data root (for example
+  `<DataDir>/tasks/<task_id>/rea/`) before opening it with rea.
+- Verify the file exists on your side (`ls`) before opening it with rea.
 
 ## 2. Session lifecycle
 
@@ -36,4 +45,4 @@ Rules:
 - Large results are truncated to the session output limit with spill to disk; narrow the query instead of paging through huge output.
 - If a call fails with `capability_unavailable`, read the message: it usually lists the exact candidate provider ids or the remediation to apply.
 - rea reads files only; it never executes the target.
-- rea cannot see container-only paths; do not try to open files outside the shared data mount.
+- In a containerised deployment rea cannot see paths outside the shared data mount; host-native deployments have no such restriction.

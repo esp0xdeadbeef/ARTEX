@@ -101,7 +101,7 @@ Run the same harness against the patched build and confirm the clean result; an 
 
 - The rea MCP server (`mcp__rea__*`) opens files read-only on the host and never executes targets. Use it for structure, strings, and symbol questions on either build; files must live under the shared data mount and rea takes host-side paths.
 - `ghidriff` needs Java plus a Ghidra install. Verify availability before promising a diff; if no diff toolchain exists, say so and stop.
-- PoC execution belongs in an authorized lab VM, never in the task container.
+- PoC execution belongs in an authorized lab VM, never on the ARTEX host itself.
 
 ## Completion self-check
 

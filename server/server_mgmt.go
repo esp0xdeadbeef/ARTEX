@@ -2338,7 +2338,7 @@ func (s *Server) pgListModels(w http.ResponseWriter, r *http.Request) {
 // {{.Now}} — e.g. subtract it from a fixed start stamp to reason about elapsed time.
 var globalPromptVars = []db.PromptVar{
 	{Name: "Now", Description: "current server time (refreshed live on every run; subtract a fixed start time from it to measure elapsed time)", Example: "2026-08-11 14:30:00 CST", Source: "runtime"},
-	{Name: "DataDir", Description: "server data root directory (the root of all task/session artifacts; each agent actually writes to a subdirectory beneath it, e.g. <DataDir>/<taskID>)", Example: "/app/data", Source: "runtime"},
+	{Name: "DataDir", Description: "server data root directory on this host (the root of all task/session artifacts; each agent writes to a subdirectory beneath it, e.g. <DataDir>/tasks/<task_id>)", Example: "/home/user/.local/share/artex/data", Source: "runtime"},
 }
 
 // withGlobalVars appends the universal runtime vars onto an agent's own catalog,

@@ -120,7 +120,7 @@ BFLA, function level:
 |---|---|---|
 | curl + jq | request replay and diffing | always available |
 | jwt_tool | JWT attack automation | pip-installable; verify before use |
-| ffuf, kiterunner | endpoint brute force | verify container availability |
+| ffuf, kiterunner | endpoint brute force | verify the tool is on PATH (`command -v kiterunner`) |
 | Burp Autorize, AuthMatrix | two-session authorization diffing | only where a Burp instance exists |
 
 The upstream playbook also names Vespasian, Entropy, Escape DAST, FireTail, and api.sh; treat those as references until verified in this environment, and prefer the manual checklists over unverified tooling.
