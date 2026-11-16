@@ -255,8 +255,40 @@
               fi
             done
 
-            if [ -z "''${ARTEX_PG_DSN:-}" ] && [ -z "''${ARTEX_PG_DSN_FILE:-}" ]; then
-              echo "artex: no database configured — set ARTEX_PG_DSN or ARTEX_PG_DSN_FILE" >&2
+            # Fail here, not 30 s later inside the container: without a database
+            # ARTEX cannot start, and a crash-restart loop just looks like a hang.
+            # ARTEX_AUTO_DB=1 starts a throwaway PostgreSQL on a shared network.
+            if [ -z "''${ARTEX_PG_DSN:-}" ] && [ -z "''${ARTEX_PG_DSN_FILE:-}" ] && [ "''${ARTEX_AUTO_DB:-0}" = "1" ]; then
+              db_name="''${name}-db"
+              db_pass="$(head -c 18 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+              net_args+=(--network "$name-net")
+              echo "artex: starting throwaway PostgreSQL ($db_name)" >&2
+              "$engine" network exists "$name-net" >/dev/null 2>&1 || "$engine" network create "$name-net" >/dev/null
+              "$engine" rm -f "$db_name" >/dev/null 2>&1 || true
+              "$engine" run -d --name "$db_name" --network "$name-net" \
+                -e POSTGRES_USER=artex -e POSTGRES_DB=artex -e POSTGRES_PASSWORD="$db_pass" \
+                docker.io/library/postgres:16-alpine >/dev/null
+              echo "artex: waiting for PostgreSQL to accept connections" >&2
+              for _ in $(seq 1 60); do
+                if "$engine" exec "$db_name" pg_isready -U artex -d artex >/dev/null 2>&1; then break; fi
+                sleep 1
+              done
+              env_args+=(-e "ARTEX_PG_DSN=postgres://artex:$db_pass@$db_name:5432/artex?sslmode=disable")
+            fi
+
+            if [ -z "''${ARTEX_PG_DSN:-}" ] && [ -z "''${ARTEX_PG_DSN_FILE:-}" ] && [ "''${ARTEX_AUTO_DB:-0}" != "1" ]; then
+              msg=$(cat <<'MSG'
+            artex: no database configured. ARTEX needs PostgreSQL. Either:
+
+              ARTEX_PG_DSN='postgres://artex:pw@127.0.0.1:5432/artex?sslmode=disable' nix run .#container
+              ARTEX_PG_DSN_FILE=/run/secrets/pg-dsn nix run .#container
+              ARTEX_AUTO_DB=1 nix run .#container     # throwaway PostgreSQL in a container
+
+            (ARTEX_NETWORK=host lets a container DSN reach a database bound to 127.0.0.1.)
+            MSG
+              )
+              printf '%s\n' "$msg" | sed 's/^            //' >&2
+              exit 2
             fi
 
             # A suspended/zombie podman holds the store lock, which makes every
