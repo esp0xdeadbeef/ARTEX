@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -52,6 +53,11 @@ func run() int {
 		addr    = flag.String("addr", "127.0.0.1:8787", "HTTP listen address")
 		dataDir = flag.String("data", filepath.Join(config.BaseDir(), "data"), "runtime data directory: traffic index, task files, transcripts (default: data/ next to the executable)")
 		proxy   = flag.String("proxy", "127.0.0.1:8788", "traffic recording proxy address (empty to disable)")
+		// Admin password seeding: set the login password at startup when none
+		// exists yet, so a container starts ready to use instead of printing a
+		// setup token. Never overwrites an existing password.
+		user = flag.String("u", "", "seed the admin password at startup: username (only \"ARTEX\" is valid; ignored otherwise)")
+		pass = flag.String("p", "", "seed the admin password at startup: password (at least 12 characters; only when no password exists)")
 	)
 	flag.Parse()
 
@@ -109,7 +115,16 @@ func run() int {
 	if len(trusted) > 0 {
 		log.Printf("[config] trusted proxies: %v", trusted)
 	}
-	srv := server.New(ctx, mgr, skillDir, *dataDir, keyDir, server.WithSecretScrub(), server.WithTrustedProxies(trusted))
+	// -p seeds the admin password before the setup token is minted (see
+	// server.WithAdminPassword); -u exists only to mirror common CLI habits.
+	if *pass != "" && strings.TrimSpace(*user) != "" && !strings.EqualFold(strings.TrimSpace(*user), "ARTEX") {
+		log.Printf("[auth] -u %q ignored: the login username is always ARTEX", *user)
+	}
+	srvOpts := []server.Option{server.WithSecretScrub(), server.WithTrustedProxies(trusted)}
+	if *pass != "" {
+		srvOpts = append(srvOpts, server.WithAdminPassword(*pass))
+	}
+	srv := server.New(ctx, mgr, skillDir, *dataDir, keyDir, srvOpts...)
 	httpSrv := &http.Server{
 		Addr:              *addr,
 		Handler:           srv.Handler(),

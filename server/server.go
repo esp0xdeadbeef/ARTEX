@@ -48,7 +48,8 @@ type Server struct {
 	skillDir string // root directory for skill subdirectories
 	jwtKey   []byte // HS256 signing key loaded from / generated into keyDir/jwt.key
 
-	scrubSecrets bool // drop ARTEX_PG_DSN and the API keys from the environment once read (binary only)
+	scrubSecrets bool   // drop ARTEX_PG_DSN and the API keys from the environment once read (binary only)
+	seedPassword string // -p: admin password to set at construction, before the setup token
 
 	setupMu    sync.Mutex
 	setupToken string // one-time token POST /api/auth/init requires; empty when none is active
@@ -167,6 +168,20 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		loginLimit: newLoginLimiter(time.Now)}
 	for _, o := range opts {
 		o(s)
+	}
+	// Seed the admin password BEFORE minting the setup token: a -p seed must not
+	// leave a usable setup token in the logs for the one-time window.
+	if s.seedPassword != "" {
+		seeded, err := s.SeedAdminPassword(s.seedPassword)
+		switch {
+		case err != nil:
+			log.Fatalf("[auth] -p: %v", err)
+		case seeded:
+			log.Printf("[auth] admin password set from -p (setup page disabled; username ARTEX)")
+		default:
+			log.Printf("[auth] -p ignored: a password is already set (use reset-password.sh to change it)")
+		}
+		s.seedPassword = ""
 	}
 	s.initSetupToken()
 	s.initSideQuestions()

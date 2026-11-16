@@ -112,6 +112,25 @@ loopback (`127.0.0.1:8788` by default).
 - Tests are not run in the sandbox (`doCheck = false`): most of them need a live
   PostgreSQL instance.
 
+## Setting the admin password from the command line
+
+A fresh database has no admin password, so ARTEX prints a one-time setup token and
+sends you to `/setup`. To skip that, seed the password at startup:
+
+```bash
+nix run github:esp0xdeadbeef/ARTEX#container -- -u ARTEX -p 'YourPassword123'
+```
+
+- The login **username is always `ARTEX`**; `-u` is accepted for CLI familiarity
+  and anything else is ignored with a log line.
+- `-p` is applied **before** the setup token is minted, so no token is printed
+  and `/setup` is disabled.
+- An existing password is **never overwritten** — the flag then logs
+  `-p ignored: a password is already set` (use `reset-password.sh` to change it).
+- Minimum 12 characters; a shorter value aborts startup with a clear message.
+- Security: a CLI argument is visible in `ps` to other local users. Prefer the
+  setup page, `reset-password.sh`, or a file-backed secret on shared machines.
+
 ## Secrets as files (Docker/Podman, systemd)
 
 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `ARTEX_PG_DSN` and `ARTEX_SECRET_KEY` each also

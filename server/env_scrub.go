@@ -32,6 +32,13 @@ func ScrubSecretEnv() {
 // process and still need ARTEX_PG_DSN on later calls.
 type Option func(*Server)
 
+// WithAdminPassword seeds the admin password during construction, before the
+// one-time setup token is generated (so -p never leaves a usable token behind).
+// An existing password is never overwritten.
+func WithAdminPassword(pw string) Option {
+	return func(s *Server) { s.seedPassword = pw }
+}
+
 // WithSecretScrub makes New drop the startup secrets after reading them, before
 // the MCP discovery goroutine and the task resume loop can spawn children.
 func WithSecretScrub() Option { return func(s *Server) { s.scrubSecrets = true } }

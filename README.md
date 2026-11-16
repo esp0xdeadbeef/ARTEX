@@ -399,6 +399,10 @@ wins over the plain one; one trailing newline is stripped; an unreadable or empt
 startup error rather than a silent fallback. The NixOS module and the flake's container
 examples use this form.
 
+**Admin password at startup**: `./artex -p 'YourPassword123'` sets the login password when none
+exists (username is always `ARTEX`), skipping the `/setup` token. It is never applied over an
+existing password. Note that a command-line argument is visible in `ps`.
+
 **LLM**: `export ANTHROPIC_API_KEY=sk-...` (or `OPENAI_API_KEY`), or configure it in the UI's
 "LLM Configuration" page, which can also add a local Ollama server as a keyless provider (format
 "Ollama", default base URL `http://127.0.0.1:11434/v1`). Optional:

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"math/big"
@@ -249,6 +250,35 @@ func (s *Server) authStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"initialized": hash != ""})
+}
+
+// SeedAdminPassword sets the admin password when none is configured yet, so a
+// container can start ready to log in instead of printing a setup token on every
+// fresh database. An existing password is never overwritten.
+//
+// It returns whether the password was written, and an error when the caller
+// supplied something unusable (too short/long, or the store failed).
+func (s *Server) SeedAdminPassword(pw string) (bool, error) {
+	if s.m == nil || s.m.pg == nil {
+		return false, nil
+	}
+	if msg := validatePassword(pw); msg != "" {
+		return false, errors.New(msg)
+	}
+	if hash, _, err := s.m.pg.GetSetting(authPassKey); err != nil {
+		return false, fmt.Errorf("read existing password: %w", err)
+	} else if hash != "" {
+		return false, nil
+	}
+	h, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
+	if err != nil {
+		return false, fmt.Errorf("hash: %w", err)
+	}
+	inserted, err := s.m.pg.InsertSettingIfAbsent(authPassKey, string(h))
+	if err != nil {
+		return false, fmt.Errorf("save: %w", err)
+	}
+	return inserted, nil
 }
 
 // initSetupToken generates the one-time setup token when no admin password is set
