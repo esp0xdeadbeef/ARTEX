@@ -247,8 +247,11 @@
             net_args=()
             if [ "''${ARTEX_NETWORK:-}" = "host" ]; then
               net_args=(--network=host)
+              # No port mapping in host mode: the app binds the host ports itself.
+              listen_args=(-addr ":$port" -proxy ":$proxy_port")
             else
               net_args=(-p "127.0.0.1:$port:8787" -p "127.0.0.1:$proxy_port:8788")
+              listen_args=(-addr :8787 -proxy :8788)
             fi
 
             # A *_FILE path from the host must be readable inside the container.
@@ -277,11 +280,20 @@
             if [ -z "''${ARTEX_PG_DSN:-}" ] && [ -z "''${ARTEX_PG_DSN_FILE:-}" ] && [ "''${ARTEX_AUTO_DB:-0}" = "1" ]; then
               db_name="''${name}-db"
               db_pass="$(head -c 18 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-              net_args+=(--network "$name-net")
               echo "artex: starting throwaway PostgreSQL ($db_name)" >&2
-              "$engine" network exists "$name-net" >/dev/null 2>&1 || "$engine" network create "$name-net" >/dev/null
               "$engine" rm -f "$db_name" >/dev/null 2>&1 || true
-              "$engine" run -d --name "$db_name" --network "$name-net" \
+              if [ "''${ARTEX_NETWORK:-}" = "host" ]; then
+                # Host networking: the DB shares the host loopback and artex
+                # reaches it by name through an explicit hosts entry.
+                db_net_args=(--network=host)
+                db_host=127.0.0.1
+              else
+                net_args+=(--network "$name-net")
+                "$engine" network exists "$name-net" >/dev/null 2>&1 || "$engine" network create "$name-net" >/dev/null
+                db_net_args=(--network "$name-net")
+                db_host="$db_name"
+              fi
+              "$engine" run -d --name "$db_name" "''${db_net_args[@]}" \
                 -e POSTGRES_USER=artex -e POSTGRES_DB=artex -e POSTGRES_PASSWORD="$db_pass" \
                 docker.io/library/postgres:16-alpine >/dev/null
               # Wait for a real TCP login, not just pg_isready: during the first
@@ -304,7 +316,7 @@
                 "$engine" rm -f "$db_name" >/dev/null 2>&1 || true
                 exit 1
               fi
-              env_args+=(-e "ARTEX_PG_DSN=postgres://artex:$db_pass@$db_name:5432/artex?sslmode=disable")
+              env_args+=(-e "ARTEX_PG_DSN=postgres://artex:$db_pass@$db_host:5432/artex?sslmode=disable")
             fi
 
             if [ -z "''${ARTEX_PG_DSN:-}" ] && [ -z "''${ARTEX_PG_DSN_FILE:-}" ] && [ "''${ARTEX_AUTO_DB:-0}" != "1" ]; then
@@ -338,7 +350,7 @@
               "''${net_args[@]}" \
               -v "$data:/app/data:Z" -v "$keys:/app/keys:Z" \
               "''${mount_args[@]}" "''${env_args[@]}" \
-              localhost/artex:latest -addr :8787 -proxy :8788 -data /app/data "$@"
+              localhost/artex:latest "''${listen_args[@]}" -data /app/data "$@"
           '';
         };
 
