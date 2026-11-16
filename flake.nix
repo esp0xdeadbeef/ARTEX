@@ -190,6 +190,7 @@
           runtimeInputs = with pkgs; [
             coreutils
             findutils
+            gnutar
           ];
           text = ''
             engine="''${ARTEX_PODMAN:-}"
@@ -208,8 +209,16 @@
             keys="''${ARTEX_KEY_DIR:-''${XDG_STATE_HOME:-$HOME/.local/state}/artex/keys}"
             mkdir -p "$data" "$keys"
 
-            echo "artex: loading image into $engine" >&2
-            "$engine" load -i ${self.packages.${system}.container} >/dev/null
+            # Load the image only when the store does not have this exact image yet.
+            # Re-importing the 2 GB tarball on every start takes minutes and looks
+            # like a hang; the store path is the image content hash, so comparing it
+            # against the image label is an exact freshness check.
+            want=${lib.escapeShellArg imageFingerprint}
+            have="$("$engine" image inspect --format '{{ index .Labels "artex.nix.build" }}' localhost/artex:latest 2>/dev/null || true)"
+            if [ "$have" != "$want" ]; then
+              echo "artex: loading image into $engine (first run, ~2 GB)" >&2
+              "$engine" load -i ${self.packages.${system}.container} >/dev/null
+            fi
             "$engine" rm -f "$name" >/dev/null 2>&1 || true
 
             # Forward only variables that are set: an empty OPENAI_API_KEY would
@@ -250,6 +259,17 @@
               echo "artex: no database configured — set ARTEX_PG_DSN or ARTEX_PG_DSN_FILE" >&2
             fi
 
+            # A suspended/zombie podman holds the store lock, which makes every
+            # podman command (including `podman ps`) block forever. Never leave
+            # one behind: this script runs the container in the foreground, so a
+            # Ctrl-C or SIGSTOP here must stop the engine too.
+            if ! timeout 60 "$engine" info >/dev/null 2>&1; then
+              echo "artex: $engine is unresponsive (a stopped/zombie podman holds the store lock)." >&2
+              echo "artex: check with 'ps -eo pid,stat,cmd | grep -E \"[TZ].*podman\"';" >&2
+              echo "artex: recover with 'kill -CONT <pid>' or 'kill <pid>'." >&2
+              exit 1
+            fi
+
             echo "artex: UI http://127.0.0.1:8787  ·  proxy 127.0.0.1:8788  ·  Ctrl-C to stop" >&2
             exec "$engine" run --rm --name "$name" --userns=keep-id \
               "''${net_args[@]}" \
@@ -258,6 +278,21 @@
               localhost/artex:latest -addr :8787 -proxy :8788 -data /app/data "$@"
           '';
         };
+
+        # Fingerprint of the image inputs: identical for identical builds, so the
+        # runner can compare it against the image label and skip `podman load`.
+        imageFingerprint = builtins.hashString "sha256" (
+          builtins.concatStringsSep "|" (
+            [ self.shortRev or "dirty" ]
+            ++ map (p: p.outPath) (
+              [
+                artex
+                pkgs.bashInteractive
+              ]
+              ++ runtimeInputs
+            )
+          )
+        );
 
       in
       {
@@ -293,6 +328,9 @@
               "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
             ];
             WorkingDir = "/app";
+            # Fingerprint of the inputs this image was built from, so the runner can
+            # skip a 2 GB re-import when the local store already has this build.
+            Labels."artex.nix.build" = imageFingerprint;
             ExposedPorts = {
               "8787/tcp" = { };
               "8788/tcp" = { };
