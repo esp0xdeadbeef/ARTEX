@@ -170,6 +170,54 @@ nix build .#artex                                                             # 
 Also bump `go_1_26` in `flake.nix` when `go.mod`'s `go` directive moves on, and
 the `version` fields when upstream releases.
 
+## NixOS module (native — no container at all)
+
+This is the path for "the agent's shell should be a **host** shell". ARTEX runs
+as a plain systemd service on the host: it sees the host filesystem, the host
+network, host processes, and executes the host's NixOS toolchain directly. No
+podman, no image, no `--privileged`, no chroot.
+
+```nix
+{
+  inputs.artex.url = "github:esp0xdeadbeef/ARTEX";
+
+  imports = [ inputs.artex.nixosModules.default ];
+
+  services.artex = {
+    enable = true;
+    port = 8787;
+    openFirewall = true;
+    # The agent's Bash tool gets this toolchain on its PATH, plus
+    # /run/current-system/sw/bin (the host's own profile).
+    path = with pkgs; [ nmap nuclei httpx subfinder katana ffuf dalfox sqlmap bbot ];
+    # Optional: extra groups for the service user (docker, wireshark, ...).
+    extraGroups = [ "wireshark" ];
+    environmentFile = "/run/secrets/artex";   # ANTHROPIC_API_KEY=..., ARTEX_PG_DSN=...
+  };
+}
+```
+
+What the agents can then do — as the **`artex` host user**, with host paths:
+
+```sh
+pwd                    # /var/lib/artex/data
+ls /home/you           # the host's home directory
+nmap -sS <target>      # CAP_NET_RAW is granted for raw-socket scans
+systemctl status sshd  # host processes are visible
+```
+
+Options added for this: `path` (toolchain on PATH), `user`, `extraGroups`
+(`postgres.*`, `settings`, `environmentFile`, `dataDir`, `keyDir`, `skillDir`
+as before). The unit runs as `users.users.artex` with
+`AmbientCapabilities = [ CAP_NET_RAW CAP_NET_BIND_SERVICE ]` and deliberately
+**light sandboxing** — it is a pentest tool that must reach the host.
+
+Security note: this is a real privilege boundary removal by design. Anything
+the `artex` user can reach, the agents can reach, and a successful prompt
+injection can act with that user's privileges. Keep `address = "127.0.0.1"`,
+keep the login password strong, and prefer a dedicated host/VM over your
+daily-driver machine.
+
 ## NixOS module
 
 ```nix

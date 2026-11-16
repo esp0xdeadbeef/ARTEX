@@ -81,6 +81,37 @@ in
       };
     };
 
+    path = lib.mkOption {
+      type = lib.types.listOf lib.types.package;
+      default = [ ];
+      example = lib.literalExpression "with pkgs; [ nmap nuclei httpx ffuf sqlmap ]";
+      description = ''
+        Extra packages put on the ARTEX service PATH, i.e. the toolchain the
+        agents' Bash tool can call. Because ARTEX runs natively as a host
+        service (not in a container), these are ordinary NixOS binaries and the
+        agent sees the host filesystem, host network and host processes.
+      '';
+    };
+
+    user = lib.mkOption {
+      type = lib.types.str;
+      default = "artex";
+      description = ''
+        System user the service runs as. Its group is added to `extraGroups`;
+        use `extraGroups = [ "docker" ]` or similar when tools need it.
+      '';
+    };
+
+    extraGroups = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [
+        "docker"
+        "wireshark"
+      ];
+      description = "Supplementary groups for the service user.";
+    };
+
     settings = lib.mkOption {
       type = lib.types.nullOr lib.types.attrs;
       default = { };
@@ -142,6 +173,15 @@ in
 
     networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [ cfg.port ];
 
+    users.users.${cfg.user} = {
+      isSystemUser = true;
+      group = cfg.user;
+      extraGroups = cfg.extraGroups;
+      home = cfg.dataDir;
+      description = "ARTEX autonomous pentesting service";
+    };
+    users.groups.${cfg.user} = { };
+
     systemd.services.artex = {
       description = "ARTEX autonomous penetration testing platform";
       wantedBy = [ "multi-user.target" ];
@@ -156,6 +196,20 @@ in
       environment = {
         ARTEX_SKILL_DIR = cfg.skillDir;
         ARTEX_JWT_KEY_DIR = cfg.keyDir;
+        # The agent's Bash tool inherits this: the host toolchain plus the
+        # system profile, so `nmap`, `nuclei`, your scripts etc. just work.
+        PATH = lib.mkForce (
+          lib.makeBinPath (
+            cfg.path
+            ++ [
+              pkgs.bash
+              pkgs.coreutils
+              pkgs.curl
+              cfg.package
+            ]
+          )
+          + ":/run/current-system/sw/bin"
+        );
       }
       // lib.optionalAttrs (cfg.settings != null) {
         ARTEX_CONFIG = "/run/artex/config.json";
@@ -183,15 +237,27 @@ in
         RuntimeDirectory = "artex";
         RuntimeDirectoryMode = "0700";
         EnvironmentFile = lib.optional (cfg.environmentFile != null) cfg.environmentFile;
+        User = cfg.user;
+        Group = cfg.user;
+        WorkingDirectory = cfg.dataDir;
         Restart = "on-failure";
         RestartSec = 5;
-        # The agents need to launch tools and write into the data dir; keep it
-        # in its own namespace but do not over-restrict (it is a pentest tool).
-        ProtectSystem = "full";
-        ProtectHome = "read-only";
-        PrivateTmp = true;
-        NoNewPrivileges = false;
+        # Runs natively on the host by design: the agents execute real tools
+        # (nmap, nuclei, ...) against real targets and need the host network,
+        # the host filesystem and raw sockets. Do NOT reintroduce a container
+        # here — the whole point is that the shell is a host shell. Sandboxing
+        # is therefore deliberately light; see the warning in the option docs.
+        NoNewPrivileges = true;
         LimitNOFILE = 65536;
+        # Capabilities the recon tools need (raw sockets for nmap -sS).
+        AmbientCapabilities = [
+          "CAP_NET_RAW"
+          "CAP_NET_BIND_SERVICE"
+        ];
+        CapabilityBoundingSet = [
+          "CAP_NET_RAW"
+          "CAP_NET_BIND_SERVICE"
+        ];
       };
     };
 
