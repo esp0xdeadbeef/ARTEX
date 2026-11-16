@@ -382,6 +382,12 @@ runtime supports it.
 }
 ```
 
+**Anthropic**: set only `ANTHROPIC_API_KEY` (or `ANTHROPIC_API_KEY_FILE=`) and ARTEX infers
+`ARTEX_LLM_PROVIDER=anthropic`; the default model is `claude-opus-4-8`. The key is sent as
+`x-api-key` to `<ARTEX_LLM_BASE_URL>/v1/messages`, so leave the base URL unset for the public API
+and set it without a `/v1` suffix for a gateway. Note that `ARTEX_LLM_PROVIDER=anthropic` reads
+only the Anthropic key: an `OPENAI_API_KEY` alone yields "no LLM provider configured".
+
 **DeepSeek / any OpenAI-compatible endpoint**: `ARTEX_LLM_PROVIDER=openai`,
 `ARTEX_LLM_BASE_URL=https://api.deepseek.com/v1`, `ARTEX_LLM_MODEL=deepseek-chat`, and the key
 in `OPENAI_API_KEY` (or `OPENAI_API_KEY_FILE=/run/secrets/deepseek-api`).
