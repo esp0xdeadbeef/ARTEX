@@ -284,11 +284,26 @@
               "$engine" run -d --name "$db_name" --network "$name-net" \
                 -e POSTGRES_USER=artex -e POSTGRES_DB=artex -e POSTGRES_PASSWORD="$db_pass" \
                 docker.io/library/postgres:16-alpine >/dev/null
+              # Wait for a real TCP login, not just pg_isready: during the first
+              # initdb the unix socket can answer while the container network is
+              # not routable yet, and artex would then die on "connection refused".
               echo "artex: waiting for PostgreSQL to accept connections" >&2
-              for _ in $(seq 1 60); do
-                if "$engine" exec "$db_name" pg_isready -U artex -d artex >/dev/null 2>&1; then break; fi
+              ready=0
+              for _ in $(seq 1 90); do
+                if "$engine" exec "$db_name" \
+                     env PGPASSWORD="$db_pass" psql -h 127.0.0.1 -U artex -d artex -tAc 'select 1' \
+                     >/dev/null 2>&1; then
+                  ready=1
+                  break
+                fi
                 sleep 1
               done
+              if [ "$ready" -ne 1 ]; then
+                echo "artex: PostgreSQL did not become ready; recent logs:" >&2
+                "$engine" logs --tail 20 "$db_name" >&2 || true
+                "$engine" rm -f "$db_name" >/dev/null 2>&1 || true
+                exit 1
+              fi
               env_args+=(-e "ARTEX_PG_DSN=postgres://artex:$db_pass@$db_name:5432/artex?sslmode=disable")
             fi
 
