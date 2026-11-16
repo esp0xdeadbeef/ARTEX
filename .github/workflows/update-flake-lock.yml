@@ -1,0 +1,127 @@
+name: update-flake-lock
+
+# Keeps flake.lock current (nixpkgs, flake-utils) without hand-editing it.
+#
+# A lock bump is not always enough to keep the build green: `flake.nix` pins
+# `go_1_26` and nodejs from nixpkgs, so a nixpkgs update can change those and
+# invalidate the fixed-output hashes in nix/vendorHash and nix/npm-deps.hash.
+# The refresh step below rebuilds the fixed-output derivations and rewrites both
+# hashes, so the pull request that lands is one that actually builds.
+
+on:
+  schedule:
+    # Monthly, and after upstream nixpkgs channels roll over.
+    - cron: "0 6 1 * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "flake.nix"
+      - "flake.lock"
+      - "nix/**"
+      - ".github/workflows/update-flake-lock.yml"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-flake-lock-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Update flake.lock
+        run: nix flake update --commit-lock-file
+
+      - name: Refresh fixed-output hashes
+        # `flake.nix` pins go_1_26 and nodejs from nixpkgs, so a lock bump can
+        # invalidate the fixed-output hashes in nix/vendorHash and
+        # nix/npm-deps.hash. Build with a stale hash -> "hash mismatch ...
+        # got: sha256-..." -> write that value and retry.
+        #
+        # IMPORTANT: a flake only sees files known to git, and for a tracked
+        # file it reads the *staged* content. Writing a hash to the working
+        # tree without `git add` leaves nix building against the old value, so
+        # every write below is followed by a stage before the next build.
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # refresh <drv-attr> <hash-file>: 0 = hash rewritten, 1 = already
+          # correct; exits 1 on any build failure that is not a hash mismatch.
+          refresh() {
+            local attr="$1" file="$2" log got
+            if log=$(nix build "$attr" --no-link --print-out-paths 2>&1); then
+              echo "$file: up to date"
+              return 1
+            fi
+            got=$(printf '%s\n' "$log" | sed -n 's/^ *got: *\(sha256-[A-Za-z0-9+/=]*\)$/\1/p' | tail -1)
+            if [ -z "$got" ]; then
+              echo "::error::$file: build failed for a reason other than a stale hash"
+              printf '%s\n' "$log"
+              exit 1
+            fi
+            echo "$file: $got"
+            printf '%s\n' "$got" > "$file"
+            # Make the new value visible to the next nix evaluation.
+            git add "$file"
+            return 0
+          }
+
+          changed=0
+          # Two rounds: the Go and npm hashes can both be stale, and fixing one
+          # re-evaluates the shared flake inputs. Round 2 confirms the result.
+          for _ in 1 2; do
+            rc=0; refresh .#artex.goModules nix/vendorHash || rc=$?
+            [ "$rc" -eq 0 ] && changed=1
+            rc=0; refresh .#web.npmDeps nix/npm-deps.hash || rc=$?
+            [ "$rc" -eq 0 ] && changed=1
+            [ "$changed" -eq 0 ] && break
+          done
+
+          if [ "$changed" -eq 0 ]; then
+            echo "hashes unchanged by the lock update"
+          fi
+
+      - name: Verify the build
+        # A lock bump that breaks the package is worse than no bump at all.
+        run: |
+          nix build .#artex --no-link --print-out-paths
+          nix build .#web --no-link --print-out-paths
+          nix eval --raw .#packages.x86_64-linux.artex.version
+
+      - name: Open or update the pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: chore/update-flake-lock
+          delete-branch: true
+          title: "chore: update flake.lock"
+          commit-message: "chore: update flake.lock"
+          # Also carries any refreshed hash from the step above.
+          add-paths: |
+            flake.lock
+            nix/vendorHash
+            nix/npm-deps.hash
+          labels: dependencies,nix
+          body: |
+            Automated `nix flake update`.
+
+            This workflow also refreshes `nix/vendorHash` and `nix/npm-deps.hash`
+            when the new nixpkgs changes the Go/node dependency hashes, and builds
+            `.#artex` and `.#web` before opening the PR.
+
+            Review the lock diff; if `go_1_26` or nodejs moved, run the Go and web
+            CI suites on the branch before merging.
